@@ -2,7 +2,7 @@
 
 namespace APBD_TASK6.DTOs
 {
-    public class CreateAppointmentDto
+    public class CreateAppointmentRequestDto
     {
         [Required]
         public int IdPatient { get; set; }

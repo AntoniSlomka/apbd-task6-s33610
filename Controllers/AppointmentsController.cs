@@ -65,5 +65,40 @@ namespace APBD_TASK6.Controllers
 
             return Ok(results);
         }
+
+        [HttpPost]
+        public async Task<ActionResult> createAppointment(
+            [FromBody] CreateAppointmentRequestDto request)
+        {
+            if (request.AppointmentDate < DateTime.UtcNow)
+            {
+                return BadRequest(new ErrorResponseDto("Appointment date cannot be in the past"));
+            }
+
+            await using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            int newId;
+
+            await using (var transaction = (SqlTransaction)await connection.BeginTransactionAsync())
+            {
+                const string insertSql = """
+                       INSERT INTO dbo.Appointments (IdPatient, IdDoctor, AppointmentDate, Status, Reason)
+                    VALUES (@IdPatient, @IdDoctor, @AppointmentDate, 'Scheduled', @Reason)
+                    """;
+
+                await using var command = new SqlCommand(insertSql, connection, transaction);
+                command.Parameters.AddWithValue("@IdPatient", request.IdPatient);
+                command.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
+                command.Parameters.AddWithValue("@AppointmentDate", request.AppointmentDate);
+                command.Parameters.AddWithValue("@Reason", request.Reason);
+
+                newId = (int)(await command.ExecuteScalarAsync())!;
+                await transaction.CommitAsync();
+            }
+            return CreatedAtRoute(nameof(GetAppointments), new { idAppointment = newId }, null);
+
+        }
+
     }
 }
