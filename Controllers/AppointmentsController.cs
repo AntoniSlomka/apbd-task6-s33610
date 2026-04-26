@@ -67,7 +67,7 @@ namespace APBD_TASK6.Controllers
         }
 
         [HttpPost]
-        public async Task<ActionResult> createAppointment(
+        public async Task<ActionResult> CreateAppointment(
             [FromBody] CreateAppointmentRequestDto request)
         {
             if (request.AppointmentDate < DateTime.UtcNow)
