@@ -2,8 +2,6 @@
 {
     public class AppointmentDetailsDto
     {
-        //patient email, phone number, doctor license number,
-        //internal notes, and record creation date.
         public int IdAppointment { get; set; }
 
         public DateTime AppointmentDate { get; set; }
@@ -14,9 +12,9 @@
 
         public string PatientLastName { get; set; } = string.Empty;
 
-        public string Email { get; set; } = string.Empty;
+        public string PatientEmail { get; set; } = string.Empty;
 
-        public string PhoneNumber { get; set; } = string.Empty;
+        public string PatientPhoneNumber { get; set; } = string.Empty;
 
         public int IdDoctor { get; set; }
 
@@ -24,7 +22,7 @@
         
         public string DoctorLastName { get; set; } = string.Empty;
         
-        public string LicenseNUmber { get; set; } = string.Empty;    
+        public string LicenseNumber { get; set; } = string.Empty;    
 
         public DateTime CreatedAt { get; set; }
 
@@ -32,7 +30,7 @@
 
         public string Reason { get; set; } = string.Empty;
         
-        public string InternalNotes { get; set; } = string.Empty;
+        public string? InternalNotes { get; set; }
         
     }
 }
