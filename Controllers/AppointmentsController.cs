@@ -1,6 +1,7 @@
 ﻿using APBD_TASK6.DTOs;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
+using System.ComponentModel;
 using System.Net.NetworkInformation;
 using System.Transactions;
 
@@ -11,6 +12,13 @@ namespace APBD_TASK6.Controllers
     public class AppointmentsController : ControllerBase
     {
         private readonly string _connectionString;
+
+        // x GET /api/appointments
+        // x GET /api/appointments/{idAppointment}
+        // x POST /api/appointments
+        // x PUT /api/appointments/{idAppointment}
+        // x DELETE /api/appointments/{idAppointment}
+
 
         public AppointmentsController(IConfiguration configuration)
         {
@@ -130,17 +138,66 @@ namespace APBD_TASK6.Controllers
         public async Task<ActionResult> CreateAppointments(
             [FromBody] CreateAppointmentRequestDto request)
         {
+            if (request.AppointmentDate < DateTime.UtcNow)
+            {
+                return BadRequest(new ErrorResponseDto("Appointment date cannot be in the past"));
+            }
+
+            if (request.Reason.Length == 0 || request.Reason.Length > 250)
+            {
+                return BadRequest(new ErrorResponseDto("Reason cannot be empty and cannot be longer than 250 characters"));
+            }
+
             const string sqlPatient = """
                 SELECT p.IsActive
                 FROM dbo.Patients p
                 WHERE (p.IdPatient = @Id)
                 """;
 
+            await using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            await using var PatientCommand = new SqlCommand(sqlPatient, connection);
+            PatientCommand.Parameters.AddWithValue("@Id", (object?)request.IdPatient);
+
+            object? PatientResult = await PatientCommand.ExecuteScalarAsync();
+
+            if (PatientResult != null)
+            {
+                bool PatientIsActive = Convert.ToBoolean(PatientResult);
+                if (!PatientIsActive)
+                {
+                    return NotFound(new ErrorResponseDto("Patient must be active"));
+                }
+            }
+            else
+            {
+                return NotFound(new ErrorResponseDto($"Patient with ID: {request.IdPatient} not found"));
+            }
+
             const string sqlDoctor = """
                 SELECT d.IsActive
                 FROM dbo.Doctors d
                 WHERE (d.IdDoctor = @Id)
                 """;
+
+            await using var DoctorCommand = new SqlCommand(sqlDoctor, connection);
+            DoctorCommand.Parameters.AddWithValue("@Id", (object?)request.IdDoctor);
+
+            object? DoctorResult = await DoctorCommand.ExecuteScalarAsync();
+
+            if (DoctorResult != null)
+            {
+                bool DoctorIsActive = Convert.ToBoolean(DoctorResult);
+                if (!DoctorIsActive)
+                {
+                    return NotFound(new ErrorResponseDto("Doctor must be active"));
+                }
+            }
+            else
+            {
+                return NotFound(new ErrorResponseDto($"Doctor with ID: {request.IdDoctor} not found"));
+            }
 
             const string sqlAppointment = """
                 SELECT 1
@@ -153,81 +210,16 @@ namespace APBD_TASK6.Controllers
                 AND DATEPART(MINUTE, a.AppointmentDate) = DATEPART(MINUTE, @AppointmentDate)
                 """;
 
-            if (request.AppointmentDate < DateTime.UtcNow)
-            {
-                return BadRequest(new ErrorResponseDto("Appointment date cannot be in the past"));
-            }
-
-            if (request.Reason.Length == 0 || request.Reason.Length > 250)
-            {
-                return BadRequest(new ErrorResponseDto("Reason cannot be empty and cannot be longer than 250 characters"));
-            }
-
-            await using var PatientConnection = new SqlConnection(_connectionString);
-            await PatientConnection.OpenAsync();
-
-            await using var PatientCommand = new SqlCommand(sqlPatient, PatientConnection);
-            PatientCommand.Parameters.AddWithValue("@Id", (object?)request.IdPatient);
-
-            await using var PatientReader = await PatientCommand.ExecuteReaderAsync();
-
-            if (await PatientReader.ReadAsync())
-            {
-                if (!PatientReader.GetBoolean(0))
-                {
-                    return NotFound(new ErrorResponseDto("Patient must be active"));
-                }
-            }
-            else
-            {
-                return NotFound(new ErrorResponseDto($"Patient with ID: {request.IdPatient} not found"));
-            }
-
-            PatientReader.Close();
-            PatientConnection.Close();
-
-            await using var DoctorConnection = new SqlConnection(_connectionString);
-            await DoctorConnection.OpenAsync();
-
-            await using var DoctorCommand = new SqlCommand(sqlDoctor, DoctorConnection);
-            DoctorCommand.Parameters.AddWithValue("@Id", (object?)request.IdDoctor);
-
-            await using var DoctorReader = await DoctorCommand.ExecuteReaderAsync();
-
-            if (await DoctorReader.ReadAsync())
-            {
-                if (!DoctorReader.GetBoolean(0))
-                {
-                    return NotFound(new ErrorResponseDto("Doctor must be active"));
-                }
-            }
-            else
-            {
-                return NotFound(new ErrorResponseDto($"Doctor with ID: {request.IdDoctor} not found"));
-            }
-
-            DoctorReader.Close();
-            DoctorConnection.Close();
-
-            await using var AppointmentConnection = new SqlConnection(_connectionString);
-            await AppointmentConnection.OpenAsync();
-
-            await using var AppointmentCommand = new SqlCommand(sqlAppointment, AppointmentConnection);
+            await using var AppointmentCommand = new SqlCommand(sqlAppointment, connection);
             AppointmentCommand.Parameters.AddWithValue("@Id", (object?)request.IdDoctor);
             AppointmentCommand.Parameters.AddWithValue("@AppointmentDate", (object?)request.AppointmentDate ?? DBNull.Value);
 
-            await using var AppointmentReader = await AppointmentCommand.ExecuteReaderAsync();
-
-            if (await AppointmentReader.ReadAsync())
+            object? AppointmentResult = await AppointmentCommand.ExecuteScalarAsync();
+            
+            if (AppointmentResult != null)
             {
                 return Conflict(new ErrorResponseDto($"Appointment already exists at this time"));
             }
-
-            AppointmentReader.Close();
-            AppointmentConnection.Close();
-
-            await using var connection = new SqlConnection(_connectionString);
-            await connection.OpenAsync();
 
             int newId;
 
@@ -249,8 +241,169 @@ namespace APBD_TASK6.Controllers
                 newId = (int)(await command.ExecuteScalarAsync())!;
                 await transaction.CommitAsync();
             }
-            return CreatedAtRoute(nameof(GetAppointments), new { Id = newId }, null);
+            return CreatedAtRoute(nameof(GetAppointments), new { Id = newId }, newId);
+             
+        }
 
+        [HttpPut("{idAppointment}")]
+        public async Task<ActionResult> UpdateAppointment(int idAppointment, UpdateAppointmentRequestDto request)
+        {
+            if (request.Status != "Scheduled" && request.Status != "Completed" && request.Status != "Cancelled")
+            {
+                return BadRequest(new ErrorResponseDto($"Invalid status value"));
+            }
+
+            await using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            const string sqlAppointment = """
+                SELECT Status, AppointmentDate
+                FROM dbo.Appointments
+                WHERE IdAppointment = @Id
+                """;
+
+            await using var AppointmentCommand = new SqlCommand(sqlAppointment, connection);
+            AppointmentCommand.Parameters.AddWithValue("@Id", (object?)idAppointment);
+
+            await using var AppointmentReader = await AppointmentCommand.ExecuteReaderAsync();
+
+            if (await AppointmentReader.ReadAsync())
+            {
+                string status = AppointmentReader.GetString(0);
+                DateTime appointemntDate = AppointmentReader.GetDateTime(1);
+
+                if (status == "Completed")
+                {
+                    request.AppointmentDate = appointemntDate;
+                }
+
+            } else
+            {
+                return NotFound(new ErrorResponseDto($"Appointment with ID: {idAppointment} not found"));
+
+            }
+
+            AppointmentReader.Close();
+
+            const string sqlPatient = """
+                SELECT p.IsActive
+                FROM dbo.Patients p
+                WHERE (p.IdPatient = @Id)
+                """;
+
+            await using var PatientCommand = new SqlCommand(sqlPatient, connection);
+            PatientCommand.Parameters.AddWithValue("@Id", (object?)request.IdPatient);
+
+            object? PatientResult = await PatientCommand.ExecuteScalarAsync();
+
+            if (PatientResult != null)
+            {
+                bool PatientIsActive = Convert.ToBoolean(PatientResult);
+                if (!PatientIsActive)
+                {
+                    return NotFound(new ErrorResponseDto("Patient must be active"));
+                }
+            }
+            else
+            {
+                return NotFound(new ErrorResponseDto($"Patient with ID: {request.IdPatient} not found"));
+            }
+
+            const string sqlDoctor = """
+                SELECT d.IsActive
+                FROM dbo.Doctors d
+                WHERE (d.IdDoctor = @Id)
+                """;
+
+            await using var DoctorCommand = new SqlCommand(sqlDoctor, connection);
+            DoctorCommand.Parameters.AddWithValue("@Id", (object?)request.IdDoctor);
+
+            object? DoctorResult = await DoctorCommand.ExecuteScalarAsync();
+
+            if (DoctorResult != null)
+            {
+                bool DoctorIsActive = Convert.ToBoolean(DoctorResult);
+                if (!DoctorIsActive)
+                {
+                    return NotFound(new ErrorResponseDto("Doctor must be active"));
+                }
+            }
+            else
+            {
+                return NotFound(new ErrorResponseDto($"Doctor with ID: {request.IdDoctor} not found"));
+            }
+
+            await using (var transaction = (SqlTransaction)await connection.BeginTransactionAsync())
+            {
+
+                const string sqlUpdate = """
+                UPDATE dbo.Appointments
+                SET IdPatient = @IdPatient,
+                IdDoctor = @IdDoctor,
+                AppointmentDate = @AppointmentDate,
+                Status = @Status,
+                Reason = @Reason,
+                InternalNotes = @InternalNotes
+                WHERE IdAppointment = @Id;
+                """;
+
+                await using var command = new SqlCommand(sqlUpdate, connection, transaction);
+                command.Parameters.AddWithValue("@Id", idAppointment);
+                command.Parameters.AddWithValue("@IdPatient", request.IdPatient);
+                command.Parameters.AddWithValue("@IdDoctor", request.IdDoctor);
+                command.Parameters.AddWithValue("@AppointmentDate", request.AppointmentDate);
+                command.Parameters.AddWithValue("@Reason", request.Reason);
+                command.Parameters.AddWithValue("@Status", request.Status);
+                command.Parameters.AddWithValue("@InternalNotes", (object?)request.internalNotes ?? DBNull.Value);
+
+                int RowsAffected = await command.ExecuteNonQueryAsync();
+                Console.WriteLine($"{RowsAffected} rows affected");
+                await transaction.CommitAsync();
+            }
+            return Ok(request);
+
+        }
+
+        [HttpDelete("{idAppointment}")]
+        public async Task<ActionResult> DeleteAppointment(int idAppointment)
+        {
+            await using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            const string sqlAppointment = """
+                SELECT Status
+                FROM dbo.Appointments
+                WHERE IdAppointment = @Id
+                """;
+
+            await using var AppointmentCommand = new SqlCommand(sqlAppointment, connection);
+            AppointmentCommand.Parameters.AddWithValue("@Id", (object?)idAppointment);
+
+            object? AppointmentResult = await AppointmentCommand.ExecuteScalarAsync();
+            if (AppointmentResult != null)
+            {
+                string status = Convert.ToString(AppointmentResult);
+                if (status == "Completed")
+                {
+                    return Conflict(new ErrorResponseDto($"Appointment status: completed"));
+                }
+                
+            } else
+            {
+                return NotFound(new ErrorResponseDto($"Appointment with ID: {idAppointment} not found"));
+            }
+
+            const string sqlDelete = """
+                DELETE FROM dbo.Appointments
+                WHERE IdAppointment = @Id
+                """;
+
+            using var deleteCommand = new SqlCommand(sqlDelete, connection);
+            deleteCommand.Parameters.AddWithValue("@Id", idAppointment);
+
+            await deleteCommand.ExecuteNonQueryAsync();
+
+            return NoContent();
         }
 
     }
